@@ -69,26 +69,32 @@ func TestSemaphore_Binary(t *testing.T) {
 		assert.ErrorIs(t, ctx.Err(), context.Canceled)
 		assert.ErrorIs(t, context.Cause(ctx), ErrLockLost)
 	})
-	//t.Run("lost", func(t *testing.T) {
-	//	t.Parallel()
-	//	client, i := getClient()
-	//	defer returnClient(client, i)
-	//
-	//	s := NewSemaphore(client, "test", 1, timeoutOptions)
-	//
-	//	ctx, err := s.Lock(context.Background())
-	//	require.NoError(t, err)
-	//	assert.NoError(t, ctx.Err())
-	//
-	//	// Remove the lock to simulate a lost lock
-	//	err = client.ZRem(ctx, s.key, s.identifier).Err()
-	//	require.NoError(t, err)
-	//
-	//	time.Sleep(2 * timeoutOptions.RefreshInterval)
-	//
-	//	assert.ErrorIs(t, ctx.Err(), context.Canceled)
-	//	assert.ErrorIs(t, context.Cause(ctx), ErrLockLost)
-	//})
+	t.Run("lost", func(t *testing.T) {
+		t.Parallel()
+		client, i := getClient()
+		defer returnClient(client, i)
+
+		s := NewSemaphore(client, "test", 1, timeoutOptions)
+
+		ctx, err := s.Lock(context.Background())
+		require.NoError(t, err)
+		assert.NoError(t, ctx.Err())
+
+		var identifier string
+		s.permits.Range(func(key, _ any) bool {
+			identifier = key.(string)
+			return false
+		})
+
+		// Remove the lock to simulate a lost lock
+		err = client.ZRem(ctx, s.key, identifier).Err()
+		require.NoError(t, err)
+
+		time.Sleep(2 * timeoutOptions.RefreshInterval)
+
+		assert.ErrorIs(t, ctx.Err(), context.Canceled)
+		assert.ErrorIs(t, context.Cause(ctx), ErrLockLost)
+	})
 	t.Run("reusable acquire and release", func(t *testing.T) {
 		t.Parallel()
 		client, i := getClient()
