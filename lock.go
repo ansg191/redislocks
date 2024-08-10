@@ -2,6 +2,8 @@ package redislocks
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -58,6 +60,49 @@ type baseLock struct {
 	client redis.UniversalClient
 	key    string
 	opts   TimeoutOptions
+}
+
+func (l *baseLock) lockInternal(
+	ctx context.Context,
+	lockFn func(context.Context, string) (bool, error),
+	o TimeoutOptions,
+) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, o.AcquireTimeout, ErrAcquireTimeout)
+	defer cancel()
+
+	for attempt := uint64(0); attempt < o.AcquireAttemptsLimit; attempt++ {
+		acquired, err := lockFn(ctx, l.key)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) &&
+				errors.Is(context.Cause(ctx), ErrAcquireTimeout) {
+				return ErrAcquireTimeout
+			}
+			return err
+		}
+
+		if acquired {
+			// Acquired lock.
+			return nil
+		}
+
+		// Lock wasn't acquired, wait before the next attempt.
+		timer := time.NewTimer(o.RetryInterval)
+
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			err = ctx.Err()
+			if errors.Is(err, context.DeadlineExceeded) &&
+				errors.Is(context.Cause(ctx), ErrAcquireTimeout) {
+				return ErrAcquireTimeout
+			}
+			return err
+		case <-timer.C:
+		}
+	}
+	return ErrAcquireAttemptsLimit
 }
 
 type ctxEntry struct {

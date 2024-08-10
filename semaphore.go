@@ -2,7 +2,6 @@ package redislocks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -60,63 +59,41 @@ func (s *Semaphore) Lock(ctx context.Context, opts ...TimeoutOption) (context.Co
 		return nil, err
 	}
 
-	aCtx, cancel := context.WithTimeoutCause(ctx, s.opts.AcquireTimeout, ErrAcquireTimeout)
-	defer cancel()
-
-	for attempt := uint64(0); attempt < s.opts.AcquireAttemptsLimit; attempt++ {
+	err = s.lockInternal(ctx, func(ctx context.Context, key string) (bool, error) {
 		resp, err := acquireScript.Run(
-			aCtx,
+			ctx,
 			s.client,
 			[]string{s.key},
 			s.limit,
 			identifier,
-			s.opts.LockTimeout.Milliseconds(),
+			o.LockTimeout.Milliseconds(),
 			time.Now().UnixMilli(),
 		).Result()
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) &&
-				errors.Is(context.Cause(aCtx), ErrAcquireTimeout) {
-				return nil, ErrAcquireTimeout
-			}
-			return nil, err
+			return false, err
 		}
 
 		result, ok := resp.(int64)
 		if !ok {
-			return nil, fmt.Errorf("unexpected result type: %T", resp)
+			return false, fmt.Errorf("unexpected result type: %T", resp)
 		}
-		if result == 1 {
-			// Acquired lock, return context that is canceled when the lock is lost.
-			// Starts a goroutine to refresh the lock periodically.
-			newCtx, newCancel := context.WithCancelCause(ctx)
-			entry := &ctxEntry{
-				stop:   make(chan struct{}),
-				ctx:    ctx,
-				cancel: newCancel,
-			}
-			s.permits.Store(identifier, entry)
-			go s.refresh(newCtx, identifier, o)
-			return newCtx, nil
-		}
-
-		// Lock wasn't acquired, wait before the next attempt.
-		timer := time.NewTimer(s.opts.RetryInterval)
-
-		select {
-		case <-aCtx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			err = aCtx.Err()
-			if errors.Is(err, context.DeadlineExceeded) &&
-				errors.Is(context.Cause(aCtx), ErrAcquireTimeout) {
-				return nil, ErrAcquireTimeout
-			}
-			return nil, err
-		case <-timer.C:
-		}
+		return result == 1, nil
+	}, o)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrAcquireAttemptsLimit
+
+	// Acquired lock, return context that is canceled when the lock is lost.
+	// Starts a goroutine to refresh the lock periodically.
+	newCtx, newCancel := context.WithCancelCause(ctx)
+	entry := &ctxEntry{
+		stop:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: newCancel,
+	}
+	s.permits.Store(identifier, entry)
+	go s.refresh(newCtx, identifier, o)
+	return newCtx, nil
 }
 
 func (s *Semaphore) refresh(ctx context.Context, identifier string, o TimeoutOptions) {

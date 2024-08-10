@@ -39,53 +39,31 @@ func (m *Mutex) Lock(ctx context.Context, opts ...TimeoutOption) (context.Contex
 		opt(&o)
 	}
 
-	aCtx, cancel := context.WithTimeoutCause(ctx, m.opts.AcquireTimeout, ErrAcquireTimeout)
-	defer cancel()
-
-	for attempt := uint64(0); attempt < m.opts.AcquireAttemptsLimit; attempt++ {
-		result, err := m.client.SetArgs(aCtx, m.key, m.identifier, redis.SetArgs{
+	err := m.lockInternal(ctx, func(ctx context.Context, s string) (bool, error) {
+		result, err := m.client.SetArgs(ctx, s, m.identifier, redis.SetArgs{
 			Mode: "NX",
-			TTL:  m.opts.LockTimeout,
+			TTL:  o.LockTimeout,
 		}).Result()
 		if err != nil && !errors.Is(err, redis.Nil) {
-			if errors.Is(err, context.DeadlineExceeded) &&
-				errors.Is(context.Cause(aCtx), ErrAcquireTimeout) {
-				return nil, ErrAcquireTimeout
-			}
-			return nil, err
+			return false, err
 		}
-		if result == "OK" {
-			// Acquired lock, return context that is canceled when the lock is lost.
-			// Starts a goroutine to refresh the lock periodically.
-			newCtx, newCancel := context.WithCancelCause(ctx)
-			entry := &ctxEntry{
-				stop:   make(chan struct{}),
-				ctx:    ctx,
-				cancel: newCancel,
-			}
-			m.entry.Store(entry)
-			go m.refresh(newCtx, o)
-			return newCtx, nil
-		}
-
-		// Lock wasn't acquired, wait before the next attempt.
-		timer := time.NewTimer(m.opts.RetryInterval)
-
-		select {
-		case <-aCtx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			err = aCtx.Err()
-			if errors.Is(err, context.DeadlineExceeded) &&
-				errors.Is(context.Cause(aCtx), ErrAcquireTimeout) {
-				return nil, ErrAcquireTimeout
-			}
-			return nil, err
-		case <-timer.C:
-		}
+		return result == "OK", nil
+	}, o)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrAcquireAttemptsLimit
+
+	// Acquired lock, return context that is canceled when the lock is lost.
+	// Starts a goroutine to refresh the lock periodically.
+	newCtx, newCancel := context.WithCancelCause(ctx)
+	entry := &ctxEntry{
+		stop:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: newCancel,
+	}
+	m.entry.Store(entry)
+	go m.refresh(newCtx, o)
+	return newCtx, nil
 }
 
 func (m *Mutex) refresh(ctx context.Context, o TimeoutOptions) {
