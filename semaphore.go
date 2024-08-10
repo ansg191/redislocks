@@ -115,7 +115,7 @@ func (s *Semaphore) refresh(ctx context.Context, identifier string, o TimeoutOpt
 		case <-ctx.Done():
 			return // Context canceled, stop refreshing the lock.
 		case <-ticker.C:
-			refreshed, err := s.refreshInternal(ctx, identifier, o)
+			refreshed, err := s.tryRefresh(ctx, identifier, o)
 			if err != nil {
 				// Error happened. Try again next time.
 				continue
@@ -151,7 +151,7 @@ else
 end
 `)
 
-func (s *Semaphore) refreshInternal(ctx context.Context, identifier string, o TimeoutOptions) (bool, error) {
+func (s *Semaphore) tryRefresh(ctx context.Context, identifier string, o TimeoutOptions) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.RefreshInterval)
 	defer cancel()
 

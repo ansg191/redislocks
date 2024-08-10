@@ -84,7 +84,7 @@ func (m *Mutex) refresh(ctx context.Context, o TimeoutOptions) {
 		case <-ctx.Done():
 			return // Context canceled, stop refreshing the lock.
 		case <-ticker.C:
-			refreshed, err := m.refreshInternal(ctx, o)
+			refreshed, err := m.tryRefresh(ctx, o)
 			if err != nil {
 				// Error happened. Try again next time.
 				continue
@@ -115,7 +115,7 @@ end
 
 return 0`)
 
-func (m *Mutex) refreshInternal(ctx context.Context, o TimeoutOptions) (bool, error) {
+func (m *Mutex) tryRefresh(ctx context.Context, o TimeoutOptions) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.RefreshInterval)
 	defer cancel()
 
