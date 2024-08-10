@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -67,38 +66,18 @@ func (m *Mutex) Lock(ctx context.Context, opts ...TimeoutOption) (context.Contex
 }
 
 func (m *Mutex) refresh(ctx context.Context, o TimeoutOptions) {
-	if o.RefreshInterval == 0 {
-		o.RefreshInterval = time.Duration(refreshCoefficientNum * uint64(o.LockTimeout) / refreshCoefficientDen)
-	}
-	ticker := time.NewTicker(o.RefreshInterval)
-	defer ticker.Stop()
-
 	entry := m.entry.Load()
 	if entry == nil {
 		return
 	}
-	stopCh := entry.stop
 
-	for {
-		select {
-		case <-ctx.Done():
-			return // Context canceled, stop refreshing the lock.
-		case <-ticker.C:
-			refreshed, err := m.tryRefresh(ctx, o)
-			if err != nil {
-				// Error happened. Try again next time.
-				continue
-			}
-			if !refreshed {
-				// Lock lost, release the lock.
-				_ = m.Unlock()
-				return
-			}
-		case <-stopCh:
-			// Lock released, stop refreshing.
-			return
-		}
-	}
+	m.refreshInternal(
+		ctx,
+		o,
+		entry.stop,
+		m.tryRefresh,
+		m.Unlock,
+	)
 }
 
 var expireIfEqualScript = redis.NewScript(`

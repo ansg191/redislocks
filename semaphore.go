@@ -97,39 +97,21 @@ func (s *Semaphore) Lock(ctx context.Context, opts ...TimeoutOption) (context.Co
 }
 
 func (s *Semaphore) refresh(ctx context.Context, identifier string, o TimeoutOptions) {
-	if o.RefreshInterval == 0 {
-		o.RefreshInterval = time.Duration(refreshCoefficientNum * uint64(o.LockTimeout) / refreshCoefficientDen)
-	}
-	ticker := time.NewTicker(o.RefreshInterval)
-	defer ticker.Stop()
-
 	entryAny, ok := s.permits.Load(identifier)
 	if !ok {
 		return
 	}
 	entry := entryAny.(*ctxEntry)
-	stopCh := entry.stop
 
-	for {
-		select {
-		case <-ctx.Done():
-			return // Context canceled, stop refreshing the lock.
-		case <-ticker.C:
-			refreshed, err := s.tryRefresh(ctx, identifier, o)
-			if err != nil {
-				// Error happened. Try again next time.
-				continue
-			}
-			if !refreshed {
-				// Lock lost: unlock and stop refreshing.
-				_ = s.unlock(identifier)
-				return
-			}
-		case <-stopCh:
-			// Lock released, stop refreshing.
-			return
-		}
-	}
+	s.refreshInternal(
+		ctx,
+		o,
+		entry.stop,
+		func(ctx context.Context, o TimeoutOptions) (bool, error) {
+			return s.tryRefresh(ctx, identifier, o)
+		},
+		s.Unlock,
+	)
 }
 
 var refreshScript = redis.NewScript(`

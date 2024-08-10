@@ -105,6 +105,46 @@ func (l *baseLock) lockInternal(
 	return ErrAcquireAttemptsLimit
 }
 
+// refreshInternal runs while the lock is held and refreshes the lock periodically.
+// It stops when the context is canceled, the lock is lost, or the stop channel is closed.
+//
+// Every o.RefreshInterval, refreshFn is called to refresh the lock.
+// If refreshFn returns false, the lock is lost and unlockFn is called to release the lock.
+func (l *baseLock) refreshInternal(
+	ctx context.Context,
+	o TimeoutOptions,
+	stopCh <-chan struct{},
+	refreshFn func(ctx context.Context, o TimeoutOptions) (bool, error),
+	unlockFn func() error,
+) {
+	if o.RefreshInterval == 0 {
+		o.RefreshInterval = time.Duration(refreshCoefficientNum * uint64(o.LockTimeout) / refreshCoefficientDen)
+	}
+	ticker := time.NewTicker(o.RefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return // Context canceled, stop refreshing the lock.
+		case <-ticker.C:
+			refreshed, err := refreshFn(ctx, o)
+			if err != nil {
+				// Error happened. Try again next time.
+				continue
+			}
+			if !refreshed {
+				// Lock lost, release the lock.
+				_ = unlockFn()
+				return
+			}
+		case <-stopCh:
+			// Lock released, stop refreshing.
+			return
+		}
+	}
+}
+
 type ctxEntry struct {
 	stop   chan struct{}
 	ctx    context.Context
