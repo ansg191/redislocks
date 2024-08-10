@@ -228,16 +228,18 @@ func (s *Semaphore) unlock(identifier string) error {
 	return s.client.ZRem(entry.ctx, s.key, identifier).Err()
 }
 
-func (s *Semaphore) Acquire(ctx context.Context, n int, opts ...TimeoutOption) (context.Context, error) {
-	newCtx := ctx
+func (s *Semaphore) Acquire(ctx context.Context, n int, opts ...TimeoutOption) ([]context.Context, error) {
+	ctxs := make([]context.Context, 0, n)
 	for i := 0; i < n; i++ {
-		var err error
-		newCtx, err = s.Lock(newCtx, opts...)
+		newCtx, err := s.Lock(ctx, opts...)
 		if err != nil {
+			// Release all acquired permits
+			_ = s.Release(i)
 			return nil, err
 		}
+		ctxs = append(ctxs, newCtx)
 	}
-	return newCtx, nil
+	return ctxs, nil
 }
 
 func (s *Semaphore) Release(n int) error {

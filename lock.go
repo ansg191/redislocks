@@ -33,15 +33,15 @@ type SemaphoreLocker interface {
 	// Acquire acquires n permits. Acquire blocks until n permits are acquired, the
 	// context is canceled, the operation times out, or an error occurs.
 	//
-	// On acquiring the permits, Acquire returns a new child context of ctx that is
-	// canceled when any of the permits are released. Additionally, Acquire starts a
+	// On acquiring the permits, Acquire returns new child contexts of ctx that are
+	// canceled when the permits are released. Additionally, Acquire starts a
 	// goroutine to periodically check and refresh the permits.
 	//
 	// Release must be called when the permits are no longer necessary to release the
 	// permits and stop the refresh goroutine.
 	//
 	// Acquire(ctx, 1, opts...) is equivalent to Lock(ctx, opts...).
-	Acquire(ctx context.Context, n int, opts ...TimeoutOption) (context.Context, error)
+	Acquire(ctx context.Context, n int, opts ...TimeoutOption) ([]context.Context, error)
 
 	// Release releases n permits.
 	//
